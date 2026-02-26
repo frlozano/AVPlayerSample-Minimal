@@ -17,9 +17,10 @@ import SwiftUI
 import AVKit
 
 struct ContentView: View {
-    /// Player configured with a sample remote video URL (Big Buck Bunny).
     var player: AVPlayer {
-        AVPlayer(url: URL(string: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4")!)
+        AVPlayer(url: URL(string: "https://csm-e-cepoc3aeuw1live-01060fd8d8a964bd1.bln1.yospace.com/csm/sgai/extlive/rikstvnodev01,vox_poc_nep_hlscmaf_sgai_clear.m3u8?yo.oh=Y3NtLWUtc2dhaS1saXZlLWV1dzEtZWIuYmxuMS55b3NwYWNlLmNvbQ==&customerId=f05b443b21bf2352a986e2d7ab533c76db75d78c&deviceType=iOS&sessionId=57f3ac84-3ecb-72a0-d771-1b7b3cd60052&adap=no_dolby&RikstvAssetId=rikstv_7193&yo.js=true")!)
+        
+        //https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8
     }
     
     /// The main view hierarchy displaying the video player at a fixed height.
