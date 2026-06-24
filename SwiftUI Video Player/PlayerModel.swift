@@ -62,7 +62,7 @@ final class PlayerModel: ObservableObject {
     // MARK: - Tunables (logging + recovery)
 
     private let pollEverySeconds: TimeInterval = 5
-    private let watchdogGraceSeconds: TimeInterval = 10
+    private let watchdogGraceSeconds: TimeInterval = 3
     private let timeNotAdvancingEpsilon: Double = 0.001
     private let pinnedLoadedEndEpsilon: Double = 0.01
 
