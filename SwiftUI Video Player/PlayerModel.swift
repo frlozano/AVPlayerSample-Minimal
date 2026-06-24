@@ -37,8 +37,9 @@ final class PlayerModel: ObservableObject {
 
     private var stallSeq: Int = 0
 
-    private var lastTimeSampleAt: Date?
     private var lastPlayerTimeSample: Double = .nan
+    /// Wallclock time when playerTime first stopped advancing; nil when playing normally.
+    private var playerTimeFrozenSince: Date?
 
     private var lastLoadedEnd: Double?
     private var loadedPinnedCount: Int = 0
@@ -64,7 +65,6 @@ final class PlayerModel: ObservableObject {
     private let watchdogGraceSeconds: TimeInterval = 10
     private let timeNotAdvancingEpsilon: Double = 0.001
     private let pinnedLoadedEndEpsilon: Double = 0.01
-    private let preferredForwardBuffer: TimeInterval = 12.0  // extra buffer for SGAI interstitial jumps
 
     // Recovery thresholds tuned for your logs:
     private let bufferTailTinySeconds: Double = 0.25
@@ -122,17 +122,13 @@ final class PlayerModel: ObservableObject {
 
     private func commitNewItem(url: URL, tag: String) {
         let newItem = AVPlayerItem(url: url)
-        
-        // Yospace stall
-        log("Setting preferredForwardBuffer to: " + "\(preferredForwardBuffer)")
-        newItem.preferredForwardBufferDuration = preferredForwardBuffer  // ← add this
 
         itemID = UUID()
         item = newItem
 
         stallSeq = 0
-        lastTimeSampleAt = nil
         lastPlayerTimeSample = .nan
+        playerTimeFrozenSince = nil
         lastLoadedEnd = nil
         loadedPinnedCount = 0
         lastAccessURI = nil
@@ -257,41 +253,46 @@ final class PlayerModel: ObservableObject {
         let now = Date()
         let pt = safeSeconds(player.currentTime())
 
-        if let lastAt = lastTimeSampleAt, pt.isFinite, lastPlayerTimeSample.isFinite {
-            let dt = now.timeIntervalSince(lastAt)
+        if pt.isFinite, lastPlayerTimeSample.isFinite {
             let delta = pt - lastPlayerTimeSample
 
-            if dt >= watchdogGraceSeconds && abs(delta) <= timeNotAdvancingEpsilon && player.rate > 0 {
-                let wait = waitingReasonString(player.reasonForWaitingToPlay)
-                let loadedEnd = lastEndSeconds(of: item.loadedTimeRanges)
-                let seekableEnd = lastEndSeconds(of: item.seekableTimeRanges)
+            if abs(delta) <= timeNotAdvancingEpsilon && player.rate > 0 {
+                // Time hasn't moved — start or extend the frozen clock.
+                if playerTimeFrozenSince == nil { playerTimeFrozenSince = now }
+                let frozenFor = now.timeIntervalSince(playerTimeFrozenSince!)
 
-                let bufferTail: Double? = {
-                    guard let loadedEnd, pt.isFinite else { return nil }
-                    return loadedEnd - pt
-                }()
+                if frozenFor >= watchdogGraceSeconds {
+                    let wait = waitingReasonString(player.reasonForWaitingToPlay)
+                    let loadedEnd = lastEndSeconds(of: item.loadedTimeRanges)
+                    let seekableEnd = lastEndSeconds(of: item.seekableTimeRanges)
 
-                let liveDelta: Double? = {
-                    guard let seekableEnd, pt.isFinite else { return nil }
-                    return seekableEnd - pt
-                }()
+                    let bufferTail: Double? = {
+                        guard let loadedEnd, pt.isFinite else { return nil }
+                        return loadedEnd - pt
+                    }()
 
-                log("🧨 WATCHDOG time-not-advancing @\(isoNow()) delta=\(delta.rounded(toPlaces: 3)) rate=\(player.rate) tcs=\(player.timeControlStatus.rawValue) wait=\(wait) playerTime=\(pt.rounded(toPlaces: 2)) itemTime=\(safeSeconds(item.currentTime()).rounded(toPlaces: 2)) loadedEnd=\(loadedEnd?.rounded(toPlaces: 2).description ?? "nil") seekableEnd=\(seekableEnd?.rounded(toPlaces: 2).description ?? "nil") bufferTail=\(bufferTail?.rounded(toPlaces: 2).description ?? "nil") liveDelta=\(liveDelta?.rounded(toPlaces: 2).description ?? "nil") bufEmpty=\(item.isPlaybackBufferEmpty) keepUp=\(item.isPlaybackLikelyToKeepUp) bufFull=\(item.isPlaybackBufferFull) loadedPinnedCount=\(loadedPinnedCount) reqStagnantCount=\(reqStagnantCount)")
+                    let liveDelta: Double? = {
+                        guard let seekableEnd, pt.isFinite else { return nil }
+                        return seekableEnd - pt
+                    }()
 
-                if reqStagnantCount >= 2 {
-                    log("🧊 ACCESSLOG not progressing uri=\(lastAccessURI ?? "nil") mediaReq=\(lastAccessMediaReq?.description ?? "nil")")
+                    log("🧨 WATCHDOG time-not-advancing for \(String(format: "%.1f", frozenFor))s @\(isoNow()) rate=\(player.rate) tcs=\(player.timeControlStatus.rawValue) wait=\(wait) playerTime=\(pt.rounded(toPlaces: 2)) itemTime=\(safeSeconds(item.currentTime()).rounded(toPlaces: 2)) loadedEnd=\(loadedEnd?.rounded(toPlaces: 2).description ?? "nil") seekableEnd=\(seekableEnd?.rounded(toPlaces: 2).description ?? "nil") bufferTail=\(bufferTail?.rounded(toPlaces: 2).description ?? "nil") liveDelta=\(liveDelta?.rounded(toPlaces: 2).description ?? "nil") bufEmpty=\(item.isPlaybackBufferEmpty) keepUp=\(item.isPlaybackLikelyToKeepUp) bufFull=\(item.isPlaybackBufferFull) loadedPinnedCount=\(loadedPinnedCount) reqStagnantCount=\(reqStagnantCount)")
+
+                    if reqStagnantCount >= 2 {
+                        log("🧊 ACCESSLOG not progressing uri=\(lastAccessURI ?? "nil") mediaReq=\(lastAccessMediaReq?.description ?? "nil")")
+                    }
+
+                    maybeRecoverFromStallLikeDeadlock(item: item, now: now, playerTime: pt)
                 }
-
-                maybeRecoverFromStallLikeDeadlock(item: item, now: now, playerTime: pt)
             } else {
-                // If time is moving again, clear staged recovery so next stall can restart at soft stage.
+                // Time is moving — clear the frozen clock and reset recovery stage.
+                playerTimeFrozenSince = nil
                 if abs(delta) > timeNotAdvancingEpsilon {
                     recoveryStage = 0
                 }
             }
         }
 
-        lastTimeSampleAt = now
         lastPlayerTimeSample = pt
     }
 
