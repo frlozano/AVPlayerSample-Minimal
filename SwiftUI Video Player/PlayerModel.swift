@@ -437,7 +437,8 @@ final class PlayerModel: ObservableObject {
                 for event in events {
                     for item in event.templateItems {
                         let url = (item.asset as? AVURLAsset)?.url
-                        self.log("📺 [SGAI] Event id=\(event.identifier) startDate=\(self.iso(event.date)) url=\(url?.absoluteString ?? "nil")")
+                        let startStr = event.date.map { self.iso($0) } ?? "nil"
+                        self.log("📺 [SGAI] Event id=\(event.identifier) startDate=\(startStr) url=\(url?.absoluteString ?? "nil")")
                         self.probeInterstitialURL(url)
                     }
                 }
