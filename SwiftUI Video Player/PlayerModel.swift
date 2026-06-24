@@ -59,6 +59,11 @@ final class PlayerModel: ObservableObject {
     private var lastRecoveryPlayerTime: Double = .nan
     private var recoveryStage: Int = 0 // 0=none, 1=soft seek attempted, 2=hard reload attempted
 
+    /// Fires once per item at first TCS=2. If buffer is thin at the live edge, seeks back
+    /// proactively before AVPlayer stalls (avoids the ~12s watchdog recovery latency).
+    private var startupLiveEdgeGuardFired = false
+    private let startupBufferThinThreshold: Double = 3.0
+
     // MARK: - Tunables (logging + recovery)
 
     private let pollEverySeconds: TimeInterval = 5
@@ -140,6 +145,7 @@ final class PlayerModel: ObservableObject {
         lastRecoveryAt = nil
         lastRecoveryPlayerTime = .nan
         recoveryStage = 0
+        startupLiveEdgeGuardFired = false
 
         player.replaceCurrentItem(with: nil)
 
@@ -358,6 +364,35 @@ final class PlayerModel: ObservableObject {
         log("🛠️ RECOVERY triggered seq=\(recoverySeq) stage=\(recoveryStage) bufferTail=\((bufferTail ?? .nan).rounded(toPlaces: 2)) liveDelta=\((liveDelta ?? .nan).rounded(toPlaces: 2)) loadedPinnedCount=\(loadedPinnedCount) reqStagnantCount=\(reqStagnantCount)")
     }
 
+    /// Proactive guard: fires once at the first TCS=2 (playing). If the buffer at the live
+    /// edge is too thin (< startupBufferThinThreshold) or playerTime is already past the
+    /// seekable range (liveDelta < 0), seeks back liveEdgeSafetySoft seconds behind the
+    /// live edge immediately — before AVPlayer has a chance to stall.
+    private func maybeApplyStartupLiveEdgeGuard(item: AVPlayerItem) {
+        guard !startupLiveEdgeGuardFired else { return }
+        startupLiveEdgeGuardFired = true
+
+        let pt = safeSeconds(player.currentTime())
+        guard pt.isFinite else { return }
+
+        let seekableEnd = lastEndSeconds(of: item.seekableTimeRanges)
+        let loadedEnd = lastEndSeconds(of: item.loadedTimeRanges)
+
+        let bufferTail: Double? = loadedEnd.map { $0 - pt }
+        let liveDelta: Double? = seekableEnd.map { $0 - pt }
+
+        let thinBuffer = (bufferTail ?? .infinity) < startupBufferThinThreshold
+        let pastLiveEdge = (liveDelta ?? 0) < 0
+
+        guard thinBuffer || pastLiveEdge else {
+            log("🟢 STARTUP GUARD ok bufferTail=\((bufferTail ?? .nan).rounded(toPlaces: 2)) liveDelta=\((liveDelta ?? .nan).rounded(toPlaces: 2)) — no action")
+            return
+        }
+
+        log("⚡ STARTUP GUARD thin buffer at live edge — seeking back \(liveEdgeSafetySoft)s bufferTail=\((bufferTail ?? .nan).rounded(toPlaces: 2)) liveDelta=\((liveDelta ?? .nan).rounded(toPlaces: 2))")
+        performSoftResyncToLiveEdge(item: item, reason: "startup-live-edge-guard")
+    }
+
     private func performSoftResyncToLiveEdge(item: AVPlayerItem, reason: String) {
         guard let target = liveEdgeTargetTime(item: item, safety: liveEdgeSafetySoft) else {
             log("🛠️ SOFT RESYNC skipped (no seekable) reason=\(reason)")
@@ -492,6 +527,9 @@ final class PlayerModel: ObservableObject {
                 guard let self else { return }
                 self.log("⏱ timeControlStatus = \(status.rawValue) (\(status))")
                 if let item { self.dumpState(item, tag: "TCS=\(status.rawValue)") }
+                if status == .playing, let item {
+                    self.maybeApplyStartupLiveEdgeGuard(item: item)
+                }
             }
             .store(in: &cancellables)
 
