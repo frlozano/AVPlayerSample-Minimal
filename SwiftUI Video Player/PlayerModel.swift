@@ -72,7 +72,7 @@ final class PlayerModel: ObservableObject {
     private let recoveryCooldownSeconds: TimeInterval = 8
 
     // Seek safety (avoid landing exactly on the stuck edge)
-    private let liveEdgeSafetySoft: Double = 0.75
+    private let liveEdgeSafetySoft: Double = 8.0
     private let liveEdgeSafetyHard: Double = 2.0
 
     // MARK: - Init
